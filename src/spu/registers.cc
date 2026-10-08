@@ -20,12 +20,16 @@
 #include "spu/registers.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 
 #include "core/logger.h"
 #include "core/psxemulator.h"
 #include "core/r3000a.h"
 #include "spu/externals.h"
 #include "spu/interface.h"
+
+extern void dbgNoteWrite(uint32_t idx);
 
 namespace {
 // Hardware runs the SPU at 44100 Hz off the 33.8688 MHz CPU clock: 768 cycles per
@@ -181,9 +185,29 @@ void PCSX::SPU::impl::resetAdpcmWalk(int ch) {
 ////////////////////////////////////////////////////////////////////////
 // Write registers: called by the main emulator.
 ////////////////////////////////////////////////////////////////////////
+extern std::atomic<uint64_t> g_dbgDumpFrames;
+
+// Temporary: log SPU register writes only when something meaningful changes.
+static void dbgRegisterWrite(uint32_t r, uint16_t val) {
+    static uint16_t last[0x100];
+    static bool seen[0x100];
+    if (r < 0x0c00 || r >= 0x0e00) return;
+    // Transfer address, data port and transfer control are written for every chunk.
+    if (r == 0x0da6 || r == 0x0da8 || r == 0x0dac) return;
+    // Key on and key off are triggers, so log them even when the value repeats.
+    const bool trigger = (r >= 0x0d88 && r <= 0x0d8e) || r == 0x0da2;
+    uint16_t v = val;
+    if (r == 0x0daa) v &= 0xFFCF;  // ignore the transfer mode bits that toggle per chunk
+    const unsigned i = (r - 0x0c00) >> 1;
+    if (!trigger && seen[i] && last[i] == v) return;
+    seen[i] = true;
+    last[i] = v;
+    fprintf(stderr, "%llu reg %04x = %04x\n", (unsigned long long)g_dbgDumpFrames.load(), r, val);
+}
 
 void PCSX::SPU::impl::writeRegister(uint32_t reg, uint16_t val) {
     const uint32_t r = reg & 0xfff;
+    dbgRegisterWrite(r, val);
 
     regArea[(r - 0xc00) >> 1] = val;
 
@@ -348,6 +372,7 @@ void PCSX::SPU::impl::writeRegister(uint32_t reg, uint16_t val) {
             break;
 
         case H_SPUdata:
+            dbgNoteWrite(spuAddr >> 1);
             spuMem[spuAddr >> 1] = val;
             spuAddr += 2;
             if (spuAddr > 0x7ffff) {
@@ -371,11 +396,12 @@ void PCSX::SPU::impl::writeRegister(uint32_t reg, uint16_t val) {
             break;
 
         case H_SPUReverbAddr:
+            fprintf(stderr, "mBASE = %04x\n", val);
             if (val == 0xFFFF || val <= 0x200) {
                 m_reverb.rvb.StartAddr = m_reverb.rvb.CurrAddr = 0;
             } else {
                 const long iv = (uint32_t)val << 2;
-                if (m_reverb.rvb.StartAddr != iv) {
+                {
                     m_reverb.rvb.StartAddr = (uint32_t)val << 2;
                     m_reverb.rvb.CurrAddr = m_reverb.rvb.StartAddr;
                 }

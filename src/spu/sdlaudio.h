@@ -116,6 +116,8 @@ class SDLAudio {
     SDLAudio(SettingsType& settings);
     ~SDLAudio() { uninit(); }
     uint32_t getFrameCount() { return m_frameCount.load(); }
+    // Temporary debugging aid: how many times the voice stream ran dry.
+    uint32_t getUnderruns() { return m_underruns.load(); }
     void reinit() {
         uninit();
         init();
@@ -200,7 +202,7 @@ class SDLAudio {
 
     EventBus::Listener m_listener;
 
-    typedef Circular<Frame, 2 * 1024> VoiceStream;
+    typedef Circular<Frame, 1024> VoiceStream;
     VoiceStream m_voicesStream;
     Circular<Frame, 16 * 1024> m_audioStream;
     typedef std::array<Frame, VoiceStream::BUFFER_SIZE> Buffer;
@@ -225,6 +227,8 @@ class SDLAudio {
     std::vector<std::string> m_devices;
 
     std::atomic<uint32_t> m_frameCount{0};
+
+    std::atomic<uint32_t> m_underruns{0};
 };
 
 }  // namespace SPU

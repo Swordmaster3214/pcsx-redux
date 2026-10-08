@@ -24,6 +24,68 @@
 #include <algorithm>
 #include <cstdint>
 
+#include <atomic>
+#include <cstdio>
+
+// Temporary stale-read detector for streaming games. Not for upstream.
+extern std::atomic<uint64_t> g_dbgDumpFrames;
+uint8_t g_dbgFresh[0x40000];
+std::atomic<int32_t> g_dbgLastWrite{-1};
+std::atomic<uint32_t> g_dbgRingStart{0};
+static uint32_t dbgStaleRun = 0, dbgTicks = 0, dbgStaleTotal = 0;
+static int32_t dbgMinMargin = 1 << 30;
+static uint64_t dbgRunStartFrame = 0;
+std::atomic<uint32_t> g_dbgPtrCell{0};
+
+void dbgNoteWrite(uint32_t idx) {
+    idx &= 0x3ffff;
+    g_dbgFresh[idx] = 1;
+    const uint32_t start = g_dbgRingStart.load(std::memory_order_relaxed);
+    if (start && idx >= start) g_dbgLastWrite.store((int32_t)idx, std::memory_order_relaxed);
+}
+
+void dbgNoteDmaWrite(uint32_t startCell, int halfwords) {
+    startCell &= 0x3ffff;
+    const uint32_t start = g_dbgRingStart.load(std::memory_order_relaxed);
+    if (!start || startCell < start) return;
+    const int32_t len = 0x40000 - (int32_t)start;
+    const int32_t diff = (int32_t)startCell - (int32_t)g_dbgPtrCell.load(std::memory_order_relaxed);
+    const int32_t ahead = ((diff % len) + len) % len;
+    fprintf(stderr, "%llu write cell=%u len=%d ahead=%d\n", (unsigned long long)g_dbgDumpFrames.load(),
+            startCell - start, halfwords, ahead);
+}
+
+static void dbgReverbAdvance(uint32_t cell, uint32_t start) {
+    g_dbgPtrCell.store(cell, std::memory_order_relaxed);
+    g_dbgRingStart.store(start, std::memory_order_relaxed);
+    if (cell < start) return;
+    const int32_t len = 0x40000 - (int32_t)start;
+    int32_t m = g_dbgLastWrite.load(std::memory_order_relaxed);
+    if (m >= (int32_t)start) {
+        m -= (int32_t)cell;
+        if (m < -len / 2) m += len;
+        if (m > len / 2) m -= len;
+        if (m < dbgMinMargin) dbgMinMargin = m;
+    }
+    if (!g_dbgFresh[cell]) {
+        if (dbgStaleRun == 0) dbgRunStartFrame = g_dbgDumpFrames.load();
+        dbgStaleRun++;
+        dbgStaleTotal++;
+    } else if (dbgStaleRun) {
+        fprintf(stderr, "%llu stale run of %u samples\n", (unsigned long long)dbgRunStartFrame, dbgStaleRun);
+        dbgStaleRun = 0;
+    }
+    g_dbgFresh[cell] = 0;
+    if (++dbgTicks >= 22050) {
+        fprintf(stderr, "%llu ring min margin %d samples, stale in last second %u\n",
+                (unsigned long long)g_dbgDumpFrames.load(), dbgMinMargin, dbgStaleTotal);
+        dbgTicks = 0;
+        dbgStaleTotal = 0;
+        dbgMinMargin = 1 << 30;
+    }
+}
+
+
 ////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////
@@ -220,6 +282,7 @@ int PCSX::SPU::ReverbUnit::mixLeft(int ns, uint16_t* spuMem, uint16_t spuCtrl) {
             rvb.wetRight = wet;
             for (int i = 19; i > 0; i--) h22R[i] = h22R[i - 1];
             h22R[0] = wet;
+            dbgReverbAdvance(rvb.CurrAddr, rvb.StartAddr);
             // Address advances once per COMPLETE 22.05kHz iteration, after both halves.
             rvb.CurrAddr++;
             if (rvb.CurrAddr > 0x3ffff) rvb.CurrAddr = rvb.StartAddr;

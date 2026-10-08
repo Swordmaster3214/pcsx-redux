@@ -20,6 +20,9 @@
 /*
  * Internal PSX counters.
  */
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
 
 #include "core/psxcounters.h"
 
@@ -28,6 +31,22 @@
 #include "core/sio1.h"
 #include "fmt/printf.h"
 #include "spu/interface.h"
+
+// Experiment only: use the real scanline length instead of 33868800 / (frames per second * lines).
+// NTSC: 3413 video cycles at 53.693175 MHz = 2152.87 CPU cycles (Redux gives 2146).
+// PAL:  3406 video cycles at 53.203425 MHz = 2168.23 CPU cycles (Redux gives 2157).
+static uint32_t experimentScanline(uint32_t original) {
+    const auto video = PCSX::g_emulator->settings.get<PCSX::Emulator::SettingVideo>();
+    const bool ntsc = video == PCSX::Emulator::PSX_TYPE_NTSC;
+    const uint32_t result = ntsc ? 2153 : 2168;
+    static bool printed = false;
+    if (!printed) {
+        printed = true;
+        fprintf(stderr, "scanline: %s mode, using %u cycles instead of %u\n", ntsc ? "NTSC" : "PAL", result,
+                original);
+    }
+    return result;
+}
 
 template <typename... Args>
 void verboseLog(int32_t level, const char *str, const Args &...args) {
@@ -155,6 +174,9 @@ void PCSX::Counters::reset(uint32_t index) {
     set();
 }
 
+// Temporary debugging aid: smallest (emulated time - audio clock) seen since the SPU thread last checked.
+std::atomic<int32_t> g_dbgMinDiff{INT32_MAX};
+
 void PCSX::Counters::update() {
     const uint64_t cycle = PCSX::g_emulator->m_cpu->m_regs.cycle;
 
@@ -170,6 +192,9 @@ void PCSX::Counters::update() {
         uint32_t target = m_audioFrames + diff;
         uint32_t newFrames = g_emulator->m_spu->getCurrentFrames();
         int32_t framesDiff = target - newFrames;
+        int32_t seenMin = g_dbgMinDiff.load(std::memory_order_relaxed);
+        while (framesDiff < seenMin && !g_dbgMinDiff.compare_exchange_weak(seenMin, framesDiff)) {
+        }
         if (framesDiff > 0) {
             g_emulator->m_cpu->m_regs.previousCycles = cycle;
             g_emulator->m_spu->waitForGoal(target);
@@ -277,7 +302,7 @@ void PCSX::Counters::recalculateRate(uint32_t index) {
                 uint32_t videoCyclesPerScanline = (videoMode == GPU::CtrlDisplayMode::VM_PAL) ? 3406 : 3413;
                 uint32_t dotsPerScanline = videoCyclesPerScanline / divider;
                 uint32_t cpuCyclesPerScanline =
-                    (PCSX::g_emulator->m_psxClockSpeed /
+                    experimentScanline(PCSX::g_emulator->m_psxClockSpeed /
                      (FrameRate[PCSX::g_emulator->settings.get<PCSX::Emulator::SettingVideo>()] *
                       m_HSyncTotal[PCSX::g_emulator->settings.get<PCSX::Emulator::SettingVideo>()]));
                 m_rcnts[index].rate = std::max<uint32_t>(cpuCyclesPerScanline / dotsPerScanline, 1);
@@ -287,7 +312,7 @@ void PCSX::Counters::recalculateRate(uint32_t index) {
             break;
         case 1:
             if (value & Rc1HSyncClock) {
-                m_rcnts[index].rate = (PCSX::g_emulator->m_psxClockSpeed /
+                m_rcnts[index].rate = experimentScanline(PCSX::g_emulator->m_psxClockSpeed /
                                        (FrameRate[PCSX::g_emulator->settings.get<PCSX::Emulator::SettingVideo>()] *
                                         m_HSyncTotal[PCSX::g_emulator->settings.get<PCSX::Emulator::SettingVideo>()]));
             } else {
@@ -431,7 +456,7 @@ void PCSX::Counters::init() {
     // rcnt base.
     m_rcnts[3].rate = 1;
     m_rcnts[3].mode = RcCountToTarget;
-    m_rcnts[3].target = (PCSX::g_emulator->m_psxClockSpeed /
+    m_rcnts[3].target = experimentScanline(PCSX::g_emulator->m_psxClockSpeed /
                          (FrameRate[PCSX::g_emulator->settings.get<PCSX::Emulator::SettingVideo>()] *
                           m_HSyncTotal[PCSX::g_emulator->settings.get<PCSX::Emulator::SettingVideo>()]));
 

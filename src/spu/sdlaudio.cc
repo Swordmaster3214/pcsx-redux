@@ -249,6 +249,8 @@ void PCSX::SPU::SDLAudio::streamCallback(SDL_AudioStream* stream, int additional
         for (unsigned i = 0; i < STREAMS; i++) {
             size_t a = (i == 0) ? m_voicesStream.dequeue(m_mixBuffers[i].data(), chunk)
                                 : m_audioStream.dequeue(m_mixBuffers[i].data(), chunk);
+            // Only the voice stream matters here. Stream 1 (CD audio) running dry is normal.
+            if (i == 0 && !muted && a < chunk) m_underruns++;
             for (size_t f = (muted ? 0 : a); f < chunk; f++) {
                 // Same as the previous backend: silently zero-fill on underflow.
                 // CDDA underflow on stream 1 is expected and fine.

@@ -22,6 +22,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <atomic>
+#include <cstdint>
 
 #include "spu/adsr.h"
 #include "spu/externals.h"
@@ -415,7 +417,8 @@ void PCSX::SPU::impl::synthesizeChannel(int ch, SPUCHAN *voice, int32_t &capVoic
 ////////////////////////////////////////////////////////////////////////
 // Main SPU job handler. This is where the sound processing happens.
 ////////////////////////////////////////////////////////////////////////
-
+extern std::atomic<int32_t> g_dbgMinDiff;
+std::atomic<uint64_t> g_dbgDumpFrames{0};
 void PCSX::SPU::impl::MainThread() {
     int ns, ch;
     int32_t tmpCapVoice1Index = 0;
@@ -550,7 +553,26 @@ void PCSX::SPU::impl::MainThread() {
         //////////////////////////////////////////////////////
         // Feed the sound. The target update rate is around 1/60 sec (16.666 ms).
 
-        if (iCycle++ > 16) {
+        if (iCycle++ > 3) {
+            // Temporary: dump the mixed output, plus how far the emulated CPU was
+            // behind or ahead of the audio clock during this stretch.
+            static FILE *dump = fopen("/tmp/spu-dump.raw", "wb");
+            static FILE *lagCsv = fopen("/tmp/spu-lag.csv", "w");
+            static uint64_t dumpedFrames = 0;
+            const size_t dumpBytes = ((uint8_t *)pS) - ((uint8_t *)spuBuffer);
+            if (dump && lagCsv) {
+                fwrite(spuBuffer, 1, dumpBytes, dump);
+                fflush(dump);
+                const int32_t worst = g_dbgMinDiff.exchange(INT32_MAX);
+                if (worst == INT32_MAX) {
+                    fprintf(lagCsv, "%llu,none\n", (unsigned long long)dumpedFrames);
+                } else {
+                    fprintf(lagCsv, "%llu,%d\n", (unsigned long long)dumpedFrames, worst);
+                }
+                fflush(lagCsv);
+                dumpedFrames += dumpBytes / 4;
+                g_dbgDumpFrames.store(dumpedFrames, std::memory_order_relaxed);
+            }
             bool done = false;
             while (!done) {
                 done = m_audioOut.feedStreamData(reinterpret_cast<SDLAudio::Frame *>(spuBuffer),
@@ -562,6 +584,19 @@ void PCSX::SPU::impl::MainThread() {
             }
             pS = (int16_t *)spuBuffer;
             iCycle = 0;
+            // Temporary: report new underruns from here, not from the audio thread.
+            static uint32_t lastUnderruns = 0;
+            const uint32_t nowUnderruns = m_audioOut.getUnderruns();
+            if (nowUnderruns != lastUnderruns) {
+                fprintf(stderr, "SPU: %u new underruns\n", nowUnderruns - lastUnderruns);
+                lastUnderruns = nowUnderruns;
+            }
+            // Temporary: sample the ring level about once a second.
+            static int levelTick = 0;
+            if (++levelTick >= 60) {
+                levelTick = 0;
+                fprintf(stderr, "SPU: ring at %zu frames\n", m_audioOut.getBytesBuffered());
+            }
         }
     }
 

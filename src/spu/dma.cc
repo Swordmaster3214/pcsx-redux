@@ -20,6 +20,9 @@
 #include "spu/externals.h"
 #include "spu/interface.h"
 
+extern void dbgNoteWrite(uint32_t idx);
+extern void dbgNoteDmaWrite(uint32_t startCell, int halfwords);
+
 // SPU RAM -> Main RAM DMA.
 void PCSX::SPU::impl::readDMAMem(uint16_t* mainMem, int size) {
     // Always lock: the mixer thread writes the capture areas of spuMem under cbMtx,
@@ -58,8 +61,9 @@ void PCSX::SPU::impl::resetCaptureBuffer() {
 // Main RAM -> SPU RAM DMA.
 void PCSX::SPU::impl::writeDMAMem(uint16_t* mainMem, int size) {
     std::lock_guard<std::mutex> lock(cbMtx);
-
+    dbgNoteDmaWrite(spuAddr >> 1, size);
     for (int i = 0; i < size; i++) {
+        dbgNoteWrite(spuAddr >> 1);
         // Copy 2 bytes.
         spuMem[spuAddr >> 1] = *mainMem++;
         // Increment the SPU address and wrap around.
