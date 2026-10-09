@@ -733,10 +733,10 @@ void PCSX::MDEC::dma0(uint32_t adr, uint32_t bcr, uint32_t chcr) {
             break;
     }
 
-    scheduledCallback0();
+    mdec0Interrupt();
 }
 
-void PCSX::MDEC::scheduledCallback0() {
+void PCSX::MDEC::mdec0Interrupt() {
     auto &mem = g_emulator->m_mem;
     mem->clearDMABusy<0>();
     mem->dmaInterrupt<0>();
@@ -836,7 +836,7 @@ void PCSX::MDEC::dma1(uint32_t adr, uint32_t bcr, uint32_t chcr) {
     }
 }
 
-void PCSX::MDEC::scheduledCallback1() {
+void PCSX::MDEC::mdec1Interrupt() {
     /* Author : gschwind
      *
      * in that case we have done all decoding stuff
@@ -864,11 +864,11 @@ void PCSX::MDEC::scheduledCallback1() {
     /* this else if avoid to read outside memory */
     if (mdec.rl >= mdec.rl_end) {
         mdec.reg1 &= ~MDEC1_STP;
-        scheduledCallback0();
+        mdec0Interrupt();
         mdec.reg1 &= ~MDEC1_BUSY;
     } else if (SWAP_LE16(*(mdec.rl)) == MDEC_END_OF_DATA) {
         mdec.reg1 &= ~MDEC1_STP;
-        scheduledCallback0();
+        mdec0Interrupt();
         mdec.reg1 &= ~MDEC1_BUSY;
     }
 

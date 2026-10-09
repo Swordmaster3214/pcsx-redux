@@ -30,9 +30,6 @@
     <ClCompile Include="..\..\..\tests\pcsxrunner\cpu.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\..\tests\pcsxrunner\cdrom.cc">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\..\tests\pcsxrunner\cop0.cc">
       <Filter>Source Files</Filter>
     </ClCompile>

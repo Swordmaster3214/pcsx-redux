@@ -119,14 +119,8 @@ sstate.proto
 # Sentry Native files
 .sentry-native
 
-# nops' configuration file
+# NOPS leftovers
 comport.txt
-
-# Cue sheets.
-*.cue
-
-# Various editors' backup files
-*.bak
 
 # NVIDIA Nsight
 GPUCache
